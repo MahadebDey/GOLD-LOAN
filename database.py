@@ -13,7 +13,7 @@ def init_db():
     # Loans table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS loans (
-            id INTEGER PRIMARY KEY AUTOINFO,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             customer_name TEXT NOT NULL,
             phone_number TEXT NOT NULL,
             metal_type TEXT NOT NULL,       -- 'Gold' ya 'Silver'
