@@ -1,96 +1,182 @@
-from database import init_db, add_loan, record_payment, calculate_loan_statement, search_loans, get_dashboard_summary
+import streamlit as st
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import pandas as pd
+from datetime import date
 
-def main():
-    init_db()
-    while True:
-        print("\n===============================")
-        print("  GOLD & SILVER LOAN LEDGER")
-        print("===============================")
-        print("1. Dashboard Summary (Total Gold/Silver & Market Cash)")
-        print("2. Naya Loan Add Karein")
-        print("3. Customer Search Karein (Name ya Phone)")
-        print("4. Customer Statement / Hisab Dekhein")
-        print("5. Payment Entry (Interest / Principal Jama Karein)")
-        print("6. Exit")
-        
-        choice = input("\nOption chunein (1-6): ").strip()
-        
-        if choice == "1":
-            summary = get_dashboard_summary()
-            print("\n--- VYAPAR SUMMARY ---")
-            print(f"Total Active Gold Girvi  : {summary['gold_weight']:.2f} grams")
-            print(f"Total Active Silver Girvi: {summary['silver_weight']:.2f} grams")
-            print(f"Total Market Out (Cash)  : Rs. {summary['net_market_out']:,.2f}")
+st.set_page_config(page_title="Gold & Silver Loan Manager", layout="wide", page_icon="🪙")
 
-        elif choice == "2":
-            print("\n--- NAYA LOAN FORM ---")
-            name = input("Customer Ka Naam: ").strip()
-            phone = input("Phone Number: ").strip()
-            metal = input("Metal Type (Gold / Silver): ").strip()
-            weight = float(input("Wajan (Grams): "))
-            carat = input("Purity / Carat (e.g. 22K / 92.5%): ").strip()
-            principal = float(input("Loan Amount (Rupaye): "))
-            rate = float(input("Monthly Interest Rate (% per month): "))
+# ----------------- GOOGLE SHEETS CONNECTION -----------------
+@st.cache_resource
+def get_google_sheet():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    client = gspread.authorize(creds)
+    # Spreadsheet open karein
+    sheet = client.open("Gold_and_Silver_Loan_Ledger").sheet1
+    return sheet
+
+try:
+    sheet = get_google_sheet()
+    data = sheet.get_all_records()
+    df = pd.DataFrame(data)
+except Exception as e:
+    st.error(f"Google Sheet connect karne mein samasya: {e}")
+    st.stop()
+
+# Data Type Corrections
+if not df.empty:
+    df["Weight_gm"] = pd.to_numeric(df["Weight_gm"], errors="coerce").fillna(0.0)
+    df["Loan_Amount"] = pd.to_numeric(df["Loan_Amount"], errors="coerce").fillna(0.0)
+
+# ----------------- LIVE METRICS -----------------
+st.title("🪙 Gold & Silver Loan Management System")
+
+active_df = df[df["Status"] == "Active"] if not df.empty else pd.DataFrame()
+active_gold_wt = active_df[active_df["Metal_Type"] == "Gold"]["Weight_gm"].sum() if not active_df.empty else 0.0
+active_silver_wt = active_df[active_df["Metal_Type"] == "Silver"]["Weight_gm"].sum() if not active_df.empty else 0.0
+active_loan_amount = active_df["Loan_Amount"].sum() if not active_df.empty else 0.0
+total_lifetime_amount = df["Loan_Amount"].sum() if not df.empty else 0.0
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("🟡 Tijori mein Gold (Active)", f"{active_gold_wt:,.3f} gm")
+col2.metric("⚪ Tijori mein Silver (Active)", f"{active_silver_wt:,.3f} gm")
+col3.metric("💰 Market mein Bacha Paisa", f"₹ {active_loan_amount:,.2f}")
+col4.metric("📈 Aaj tak Kul Diya Loan", f"₹ {total_lifetime_amount:,.2f}")
+
+st.divider()
+
+# ----------------- TABS -----------------
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📋 Loan Ledger", 
+    "➕ Nayi Loan Entry", 
+    "📈 Amount Badhayein (Top-up)", 
+    "🔒 Loan Close / Settle"
+])
+
+# ================= TAB 1: LEDGER =================
+with tab1:
+    st.subheader("Bahi-Khata / Ledger")
+    c1, c2 = st.columns(2)
+    with c1:
+        status_filter = st.selectbox("Status Filter", ["All", "Active", "Closed"])
+    with c2:
+        metal_filter = st.selectbox("Metal Filter", ["All", "Gold", "Silver"])
+        
+    filtered_df = df.copy()
+    if status_filter != "All":
+        filtered_df = filtered_df[filtered_df["Status"] == status_filter]
+    if metal_filter != "All":
+        filtered_df = filtered_df[filtered_df["Metal_Type"] == metal_filter]
+        
+    st.dataframe(filtered_df, use_container_width=True)
+
+# ================= TAB 2: NAYI ENTRY =================
+with tab2:
+    st.subheader("Naya Loan Register Karein")
+    with st.form("new_entry_form", clear_on_submit=True):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            sl_no = len(df) + 1
+            st.text(f"Serial No: {sl_no}")
+            cust_name = st.text_input("Grahak ka Naam (Customer Name)*")
+            phone = st.text_input("Mobile Number")
+            metal_type = st.selectbox("Metal Type*", ["Gold", "Silver"])
+            item_desc = st.text_input("Gehne ka Vivaran (Item Description)*")
+        with col_b:
+            entry_date = st.date_input("Date", value=date.today())
+            weight = st.number_input("Weight (Grams mein)*", min_value=0.000, step=0.001, format="%.3f")
+            loan_amt = st.number_input("Loan Amount (₹)*", min_value=0.0, step=500.0)
+            interest_rate = st.number_input("Monthly Byaaj Dar (%)", value=1.5, step=0.1)
             
-            add_loan(name, phone, metal, weight, carat, principal, rate)
-            print(">> Loan Entry Safalta Se Save Ho Gayi!")
-
-        elif choice == "3":
-            query = input("\nSearch Name ya Mobile No dalein: ").strip()
-            results = search_loans(query)
-            if not results:
-                print(">> Koi active record nahi mila.")
+        submitted = st.form_submit_button("Record Save Karein")
+        
+        if submitted:
+            if cust_name and loan_amt > 0 and weight > 0:
+                prefix = "GL" if metal_type == "Gold" else "SL"
+                loan_id = f"{prefix}-{entry_date.strftime('%Y')}-{sl_no:03d}"
+                new_row = [
+                    sl_no,
+                    loan_id,
+                    entry_date.strftime("%d/%m/%Y"),
+                    cust_name,
+                    phone,
+                    metal_type,
+                    item_desc,
+                    weight,
+                    loan_amt,
+                    interest_rate,
+                    "Active",
+                    "",
+                    ""
+                ]
+                sheet.append_row(new_row)
+                st.success(f"{cust_name} ki entry ({loan_id}) save ho gayi!")
+                st.rerun()
             else:
-                print(f"\nFound {len(results)} record(s):")
-                print("-" * 65)
-                print(f"{'ID':<4} | {'Name':<15} | {'Phone':<12} | {'Metal':<6} | {'Wt(g)':<6} | {'Principal':<10}")
-                print("-" * 65)
-                for r in results:
-                    print(f"{r[0]:<4} | {r[1]:<15} | {r[2]:<12} | {r[3]:<6} | {r[4]:<6} | Rs.{r[5]:<9}")
-                print("-" * 65)
+                st.error("Kripya sabhi zaroori jankari sahi bharein.")
 
-        elif choice == "4":
-            loan_id = input("\nLoan ID enter karein: ").strip()
-            if not loan_id.isdigit():
-                print("Invalid Loan ID")
-                continue
-            stmt = calculate_loan_statement(int(loan_id))
-            if not stmt:
-                print(">> Loan ID nahi mili.")
-                continue
+# ================= TAB 3: LOAN AMOUNT BADHAYEIN (TOP-UP) =================
+with tab3:
+    st.subheader("Puraney Loan par Rashi Badhayein (Top-up Amount)")
+    
+    if not active_df.empty:
+        active_loans = active_df["Loan_ID"].tolist()
+        topup_loan_id = st.selectbox("Loan ID Chunein", active_loans, key="topup_select")
+        
+        selected_record = active_df[active_df["Loan_ID"] == topup_loan_id].iloc[0]
+        current_amt = float(selected_record["Loan_Amount"])
+        
+        st.info(f"**Grahak:** {selected_record['Customer_Name']} | **Item:** {selected_record['Item_Description']} ({selected_record['Weight_gm']} gm) | **Puraana Loan Amount:** ₹{current_amt:,.2f}")
+        
+        with st.form("topup_form"):
+            c_top1, c_top2 = st.columns(2)
+            with c_top1:
+                topup_date = st.date_input("Rashi Badhane ki Taareekh", value=date.today())
+                extra_amt = st.number_input("Kitna Paisa Aur Badhana Hai (₹)*", min_value=100.0, step=500.0)
+            with c_top2:
+                topup_note = st.text_input("Vivaran / Note", value=f"Top-up on {topup_date.strftime('%d/%m/%Y')}")
+                new_total_amt = current_amt + extra_amt
+                st.markdown(f"**Naya Kul Loan Amount Hoga:** ₹{new_total_amt:,.2f}")
+                
+            submitted_topup = st.form_submit_button("Amount Badhayein & Update Karein")
             
-            print("\n" + "=" * 45)
-            print(f"LOAN STATEMENT: #{stmt['loan_id']}")
-            print("=" * 45)
-            print(f"Customer Name     : {stmt['name']} ({stmt['phone']})")
-            print(f"Girvi Saman       : {stmt['metal']} - {stmt['weight']}g ({stmt['carat']})")
-            print(f"Start Date        : {stmt['start_date']} ({stmt['days_elapsed']} din huye)")
-            print(f"Original Principal: Rs. {stmt['original_principal']:,.2f}")
-            print(f"Current Principal : Rs. {stmt['current_principal']:,.2f}")
-            print(f"Byaj Rate         : {stmt['monthly_rate']}% per month")
-            print("-" * 45)
-            print(f"Kul Byaj Banta Hai: Rs. {stmt['total_interest_due']:,.2f}")
-            print(f"Byaj Jama Hua     : Rs. {stmt['interest_paid']:,.2f}")
-            print(f"Baki Byaj         : Rs. {stmt['remaining_interest']:,.2f}")
-            print("-" * 45)
-            print(f"KUL DENA (PAYOFF) : Rs. {stmt['total_settlement_amount']:,.2f}")
-            print("=" * 45)
+            if submitted_topup:
+                cell = sheet.find(topup_loan_id)
+                if cell:
+                    # Column 9 = Loan_Amount, Column 13 = Remarks
+                    existing_remarks = str(selected_record.get("Remarks", ""))
+                    updated_remarks = f"{existing_remarks} | +₹{extra_amt:,.0f} ({topup_date.strftime('%d/%m/%Y')})".strip(" | ")
+                    
+                    sheet.update_cell(cell.row, 9, new_total_amt)
+                    sheet.update_cell(cell.row, 13, updated_remarks)
+                    
+                    st.success(f"Loan ID {topup_loan_id} ka amount badhakar ₹{new_total_amt:,.2f} kar diya gaya hai!")
+                    st.rerun()
+    else:
+        st.info("Abhi koi Active loan nahi hai.")
 
-        elif choice == "5":
-            loan_id = input("\nLoan ID dalein: ").strip()
-            if not loan_id.isdigit():
-                print("Invalid Loan ID")
-                continue
-            amount = float(input("Kitna rupaya jama karna hai: "))
-            p_type = input("Payment Type chunein (1 for INTEREST, 2 for PRINCIPAL): ").strip()
-            type_str = "INTEREST" if p_type == "1" else "PRINCIPAL"
+# ================= TAB 4: LOAN CLOSE =================
+with tab4:
+    st.subheader("Loan Chhudana / Status Closed Karna")
+    
+    if not active_df.empty:
+        close_loan_id = st.selectbox("Chhudaane ke liye Loan ID chunein", active_df["Loan_ID"].tolist(), key="close_select")
+        close_record = active_df[active_df["Loan_ID"] == close_loan_id].iloc[0]
+        st.info(f"**Grahak:** {close_record['Customer_Name']} | **Item:** {close_record['Item_Description']} | **Loan Amount:** ₹{close_record['Loan_Amount']}")
+        
+        with st.form("close_form"):
+            c_date = st.date_input("Close / Delivery Date", value=date.today())
+            remarks_close = st.text_input("Remarks", value="Full settlement received, item released")
+            close_btn = st.form_submit_button("Loan Close Karein")
             
-            record_payment(int(loan_id), amount, type_str)
-            print(f">> Rs. {amount} jama ho gaya ({type_str}).")
-
-        elif choice == "6":
-            print("\nExiting. Dhanyawad!")
-            break
-
-if __name__ == "__main__":
-    main()
+            if close_btn:
+                cell = sheet.find(close_loan_id)
+                if cell:
+                    sheet.update_cell(cell.row, 11, "Closed")
+                    sheet.update_cell(cell.row, 12, c_date.strftime("%d/%m/%Y"))
+                    sheet.update_cell(cell.row, 13, remarks_close)
+                    st.success(f"Loan ID {close_loan_id} safaltapoorvak close ho gaya!")
+                    st.rerun()
+    else:
+        st.info("Abhi koi Active loan nahi hai.")
