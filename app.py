@@ -6,8 +6,7 @@ from datetime import datetime, date
 st.set_page_config(page_title="Sovaa Gold & Silver Loan Manager", layout="wide", page_icon="🪙")
 
 # ==================== 1. SECURITY & LOGIN ====================
-# Yahan apna pasandida Password ya PIN set karein:
-APP_PIN = "1234"  # <-- Ise apni pasand ke PIN se badal lein
+APP_PIN = "1234"  # <-- Yahan apna password/PIN rakhein
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -23,21 +22,26 @@ if not st.session_state["authenticated"]:
             st.error("Galat Password / PIN! Access Denied.")
     st.stop()
 
-# Logout Option Sidebar mein
 with st.sidebar:
     st.write("Logged in: **Owner**")
     if st.button("Logout 🔒"):
         st.session_state["authenticated"] = False
         st.rerun()
 
-# ==================== 2. DATA CONNECTION ====================
+# ==================== 2. DATA CONNECTION & SORTING ====================
 API_URL = "https://script.google.com/macros/s/AKfycbxAkdWvO9cEg_BdruMFHvlsXLpLZGYI1nP8bR74uvpU8w70W_2d2lTq3popU0sz-Euspg/exec"
 
 def load_data():
     try:
         res = requests.get(API_URL, timeout=10)
         if res.status_code == 200:
-            return pd.DataFrame(res.json())
+            raw_data = res.json()
+            df_temp = pd.DataFrame(raw_data)
+            if not df_temp.empty and "Date" in df_temp.columns:
+                # Date-wise Descending Order (Nayi taareekh sabse upar)
+                df_temp["_temp_dt"] = pd.to_datetime(df_temp["Date"], format="%d/%m/%Y", errors="coerce")
+                df_temp = df_temp.sort_values(by="_temp_dt", ascending=False).drop(columns=["_temp_dt"])
+            return df_temp
     except Exception as e:
         st.error(f"Data fetch error: {e}")
     return pd.DataFrame()
@@ -70,24 +74,25 @@ col4.metric("📈 Aaj tak Kul Diya Loan", f"₹ {total_disbursed:,.2f}")
 st.divider()
 
 # ==================== 4. TABS ====================
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🔍 Search & Ledger", 
     "➕ Nayi Loan Entry", 
-    "✏️ Galat Entry Sudharein (Edit)", 
+    "✏️ Edit / Byaaj Badlein", 
     "📈 Amount Badhayein (Top-up)", 
-    "🔒 Loan Close / Settle"
+    "🔒 Loan Close / Settle",
+    "🗑️ Delete Entry"
 ])
 
-# ----------------- TAB 1: ADVANCED SEARCH & LEDGER -----------------
+# ----------------- TAB 1: ADVANCED SEARCH & LEDGER (DESCENDING) -----------------
 with tab1:
-    st.subheader("Bahi-Khata aur Khoj (Search)")
+    st.subheader("Bahi-Khata (Latest Entries Pehle)")
     if not df.empty:
         c1, c2, c3 = st.columns(3)
         with c1:
             search_name = st.text_input("Grahak ke Naam se khojein:")
             search_phone = st.text_input("Mobile Number se khojein:")
         with c2:
-            search_date = st.text_input("Taareekh se khojein (e.g. 31/07/2024):")
+            search_date = st.text_input("Taareekh se khojein (e.g. 01/08/2026):")
             search_amount = st.text_input("Loan Amount (₹) se khojein:")
         with c3:
             s_filter = st.selectbox("Status Filter", ["All", "Active", "Closed"])
@@ -142,13 +147,12 @@ with tab2:
                 st.success(f"{cust_name} ({loan_id}) save ho gaya!")
                 st.rerun()
 
-# ----------------- TAB 3: GALAT ENTRY EDIT KARNA -----------------
+# ----------------- TAB 3: EDIT ENTRY -----------------
 with tab3:
-    st.subheader("Galat Entry Sudharein / Byaaj Dar (Rate) Badalna")
+    st.subheader("Galat Entry Sudharein / Byaaj Dar Badalna")
     if not df.empty:
-        # User kisi bhi entry ko select kar sakta hai
         loan_choices = [f"{r['Loan_ID']} | {r['Customer_Name']} ({r['Date']})" for _, r in df.iterrows()]
-        selected_choice = st.selectbox("Sudharne ke liye Loan Chunein", loan_choices)
+        selected_choice = st.selectbox("Sudharne ke liye Loan Chunein", loan_choices, key="edit_choice")
         selected_loan_id = selected_choice.split(" | ")[0]
         rec = df[df["Loan_ID"] == selected_loan_id].iloc[0]
 
@@ -168,7 +172,7 @@ with tab3:
                 e_close = st.text_input("Close Date", value=str(rec.get("Close_Date", "")))
                 e_remarks = st.text_input("Remarks", value=str(rec.get("Remarks", "")))
 
-            if st.form_submit_button("Sudhar (Update) Save Karein"):
+            if st.form_submit_button("Sudhar Save Karein"):
                 updated_row = [
                     rec.get("Serial_No", 1),
                     selected_loan_id,
@@ -185,7 +189,7 @@ with tab3:
                     e_remarks
                 ]
                 requests.post(API_URL, json={"action": "edit_loan", "loan_id": selected_loan_id, "row": updated_row})
-                st.success(f"{selected_loan_id} ka record safaltapoorvak update ho gaya!")
+                st.success("Entry update ho gayi!")
                 st.rerun()
 
 # ----------------- TAB 4: TOP-UP AMOUNT -----------------
@@ -202,7 +206,7 @@ with tab4:
             if st.form_submit_button("Amount Update Karein"):
                 n_tot = cur_amt + extra_amt
                 r_top_list = r_top.tolist()
-                r_top_list[8] = n_tot # Loan_Amount index
+                r_top_list[8] = n_tot
                 r_top_list[12] = f"{r_top.get('Remarks', '')} | +₹{extra_amt:,.0f} ({date.today().strftime('%d/%m/%Y')})".strip(" | ")
                 requests.post(API_URL, json={"action": "edit_loan", "loan_id": top_id, "row": r_top_list})
                 st.success("Amount barabar update ho gaya!")
@@ -220,9 +224,30 @@ with tab5:
             cls_rem = st.text_input("Remarks", value="Full settlement received, gold released")
             if st.form_submit_button("Loan Closed Karein"):
                 r_cls_list = r_cls.tolist()
-                r_cls_list[10] = "Closed" # Status index
-                r_cls_list[11] = cls_date.strftime("%d/%m/%Y") # Close_Date index
-                r_cls_list[12] = cls_rem # Remarks index
+                r_cls_list[10] = "Closed"
+                r_cls_list[11] = cls_date.strftime("%d/%m/%Y")
+                r_cls_list[12] = cls_rem
                 requests.post(API_URL, json={"action": "edit_loan", "loan_id": c_id, "row": r_cls_list})
                 st.success("Loan closed ho gaya!")
                 st.rerun()
+
+# ----------------- TAB 6: DELETE ENTRY -----------------
+with tab6:
+    st.subheader("⚠️ Entry Hamesha ke Liye Delete Karein")
+    if not df.empty:
+        del_choices = [f"{r['Loan_ID']} | {r['Customer_Name']} ({r['Date']}) - ₹{r['Loan_Amount']}" for _, r in df.iterrows()]
+        selected_del = st.selectbox("Delete karne ke liye Loan Chunein", del_choices, key="del_choice")
+        del_loan_id = selected_del.split(" | ")[0]
+        
+        st.warning(f"Dhayan dein: Loan ID **{del_loan_id}** ko delete karne par ye Google Sheet se hamesha ke liye hat jayega.")
+        confirm_del = st.checkbox("Haan, main is entry ko pakka delete karna chahta hun.")
+        
+        if st.button("Delete Entry Permanently 🗑️"):
+            if confirm_del:
+                requests.post(API_URL, json={"action": "delete_loan", "loan_id": del_loan_id})
+                st.success(f"{del_loan_id} safaltapoorvak delete kar diya gaya!")
+                st.rerun()
+            else:
+                st.error("Kripya pehle checkbox par tick karke confirm karein.")
+    else:
+        st.info("Koi entry delete karne ke liye nahi mili.")
